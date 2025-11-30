@@ -1,0 +1,18 @@
+{
+  "SecureDataFolder": "C:\\Secure",
+  "LogsFolder": "C:\\Logs",
+  "DpapiSecrets": {
+    "MgTenantId": "MgTenantId.bin",
+    "MgClientId": "MgClientId.bin",
+    "MgClientSecret": "MgClientSecret.bin",
+    "SophosClientId": "SophosClientId.bin",
+    "SophosClientSecret": "SophosClientSecret.bin",
+    "KaceUsername": "KaceUser.bin",
+    "KacePassword": "KacePw.bin"
+  },
+  "KaceBaseUrl": "https://helpdesk.image.local",
+  "KaceOrganization": "Default",
+  "KaceApiVersion": "5",
+  "KacePageLimit": 1000,
+  "RetentionDays": 30
+}

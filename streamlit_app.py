@@ -61,8 +61,8 @@ CONTEXT_EXCLUSIONS = {
     "In Sophos": ["In Entra", "In Intune", "In AD", "In KACE"],
     "In KACE": ["In Entra", "In Intune", "In AD", "In Sophos"],
 }
-# ---------- Column display name mapping: display header -> actual CSV column in Data table (Row C) ----------
-data_table_display_to_actual = {
+# ---------- Shared core device fields (used in both data table and overview) ----------
+DEVICE_CORE_FIELDS = {
     "Device Name": "Name",
     "In Entra": "InEntra",
     "In Intune": "InIntune",
@@ -71,25 +71,29 @@ data_table_display_to_actual = {
     "In KACE": "InKACE",
     "Device Type": "DeviceType",
     "OS": "OS",
-    "IP Address": "Sophos_ipv4Addresses",
-    "Last Seen": "LastSeen",
-    "Primary User": "PrimaryUser",
     "Sophos Health": "Sophos_Health",
     "Total Memory (GB)": "KACE_Machine_RAM_Total",
     "Duplicate Devices": "MultiInstanceFlag",
+    "Last Seen": "LastSeen",
+    "Primary User": "PrimaryUser",
+    "AD Object GUID": "AD_ObjectGUID",
+    "Entra Device ID(s)": "Entra_DeviceIds",
+    "Intune Entra Device ID": "Intune_AzureADDeviceIds",
+}
+
+# ---------- Data table-specific fields (extends core) ----------
+DATA_TABLE_SPECIFIC_FIELDS = {
+    "IP Address": "Sophos_ipv4Addresses",
     "Entra Device Instance Count": "Entra_InstanceCount",
     "Entra Hybrid Joined": "Entra_HybridCount",
     "Entra Device ID Matches AD Object GUID": "Entra_HybridIdMatchesAD",
     "Entra Device ID Mismatches AD Object GUID": "Entra_HybridIdMismatchExists",
     "Entra Registered": "Entra_RegisteredCount",
-    "Entra Device ID(s)": "Entra_DeviceIds",
-    "Intune Entra Device ID": "Intune_AzureADDeviceIds",
-    "AD Object GUID": "AD_ObjectGUID",
     "Sophos Device Instance Count": "Sophos_InstanceCount",
 }
-# ---------- Column display name mapping: display header -> actual CSV column in Device overview table (Row D) ----------
-overview_display_to_actual = {
-    "Device Name": "Name",
+
+# ---------- Overview table-specific fields (extends core) ----------
+OVERVIEW_SPECIFIC_FIELDS = {
     "AD DNS Hostname": "AD_DNSHostName",
     "Serial Number": "SerialNumber",
     "Device Management Lists": "Contexts",
@@ -104,10 +108,7 @@ overview_display_to_actual = {
     "Has a duplicate in Entra": "Entra_DuplicateFlag",
     "Has a duplicate in Intune": "Intune_DuplicateFlag",
     "Has a duplicate in Sophos": "Sophos_DuplicateFlag",
-    "Entra Device ID(s)": "Entra_DeviceIds",
-    "Intune Entra Device ID": "Intune_AzureADDeviceIds",
     "Intune Device ID": "Intune_DeviceId",
-    "AD Object GUID": "AD_ObjectGUID",
     "Sophos ID(s)": "Sophos_Ids",
     "KACE ID": "KACE_ID",
     "Intune Endpoint Management Agent": "Intune_ManagementAgent",
@@ -116,6 +117,12 @@ overview_display_to_actual = {
     "Entra Compliant": "Entra_IsCompliant",
     "Entra Managed": "Entra_IsManaged"
 }
+
+# ---------- Column display name mapping: display header -> actual CSV column in Data table (Row C) ----------
+data_table_display_to_actual = {**DEVICE_CORE_FIELDS, **DATA_TABLE_SPECIFIC_FIELDS}
+
+# ---------- Column display name mapping: display header -> actual CSV column in Device overview table (Row D) ----------
+overview_display_to_actual = {**DEVICE_CORE_FIELDS, **OVERVIEW_SPECIFIC_FIELDS}
 
 # ======================================= 
 # ---------- Helpers/Functions ----------
