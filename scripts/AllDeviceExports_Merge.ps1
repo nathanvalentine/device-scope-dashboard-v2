@@ -503,24 +503,43 @@ function Write-DeleteLog {
 }
 
 # ==============================
-# CONFIG (variables-only)
+# CONFIG (load from config.json)
 # ==============================
 
-# --- Configurable Paths (with intelligent defaults) ---
-# If C:\Secure exists, use it; otherwise use user profile location
-if (Test-Path "C:\Secure") {
-    $SecureDataFolder = "C:\Secure"
-} else {
-    $SecureDataFolder = Join-Path $env:USERPROFILE "AppData\Local\DeviceScope\Secure"
-    Write-Warning "C:\Secure not found; using user profile location: $SecureDataFolder"
+# Load config from config.json in parent directory
+$configPath = Join-Path (Split-Path $PSScriptRoot) "config.json"
+$config = $null
+if (Test-Path $configPath) {
+    try {
+        $config = Get-Content $configPath | ConvertFrom-Json
+        Write-Host "Loaded configuration from: $configPath"
+    } catch {
+        Write-Warning "Failed to load config.json: $($_.Exception.Message). Using defaults."
+    }
 }
 
-# If C:\Logs exists, use it; otherwise use temp location
-if (Test-Path "C:\Logs") {
-    $LogsFolder = "C:\Logs"
+# --- Configurable Paths (with intelligent defaults) ---
+# Use config values if available, otherwise fallback to defaults
+if ($config.SecureDataFolder) {
+    $secureCandidate = $config.SecureDataFolder
+    if (Test-Path $secureCandidate) {
+        $SecureDataFolder = $secureCandidate
+    } else {
+        Write-Warning "SecureDataFolder from config not found: $secureCandidate. Using fallback."
+    }
 } else {
-    $LogsFolder = Join-Path $env:TEMP "DeviceScope"
-    Write-Warning "C:\Logs not found; using temp location: $LogsFolder"
+    $SecureDataFolder = if (Test-Path "C:\Secure") { "C:\Secure" } else { Join-Path $env:USERPROFILE "AppData\Local\DeviceScope\Secure" }
+}
+
+if ($config.LogsFolder) {
+    $logsCandidate = $config.LogsFolder
+    if (Test-Path $logsCandidate) {
+        $LogsFolder = $logsCandidate
+    } else {
+        Write-Warning "LogsFolder from config not found: $logsCandidate. Using fallback."
+    }
+} else {
+    $LogsFolder = if (Test-Path "C:\Logs") { "C:\Logs" } else { Join-Path $env:TEMP "DeviceScope" }
 }
 
 # Dynamically resolve the data folder relative to this script's location
@@ -544,10 +563,10 @@ $SophosClientId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "Sophos
 $SophosClientSecret = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "SophosClientSecret.bin")
 
 # ---- KACE SMA ----
-$KaceBaseUrl        = "https://helpdesk.image.local"
-$KaceOrganization   = "Default"                                       # single-org usually "Default"
-$KaceApiVersion     = "5"                                             # x-kace-api-version header
-$KacePageLimit      = 1000                                            # page size for KACE pagination strategies
+$KaceBaseUrl        = if ($config.KaceBaseUrl) { $config.KaceBaseUrl } else { "https://helpdesk.image.local" }
+$KaceOrganization   = if ($config.KaceOrganization) { $config.KaceOrganization } else { "Default" }
+$KaceApiVersion     = if ($config.KaceApiVersion) { $config.KaceApiVersion } else { "5" }
+$KacePageLimit      = if ($config.KacePageLimit) { $config.KacePageLimit } else { 1000 }
 $KaceUsername       = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "KaceUser.bin")
 $KacePassword       = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "KacePw.bin")
 
@@ -576,7 +595,7 @@ if (Test-Path $SharePointConfigFile) {
 # Your local file to upload: use the merged export your script already created
 # $LocalCsvPath = $MergedExportPath   # e.g., "C:\...\DeviceScope_Merged.csv"
 $ReportPrefix = [IO.Path]::GetFileNameWithoutExtension($MergedExportPath) # "DeviceScope_Merged"
-$RetentionDays = 30
+$RetentionDays = if ($config.RetentionDays) { $config.RetentionDays } else { 30 }
 
 # Logging
 New-Item -ItemType Directory -Path $LogsFolder -Force | Out-Null
