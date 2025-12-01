@@ -354,16 +354,47 @@ function Get-GraphAccessToken {
     param(
         [Parameter(Mandatory=$true)][string]$TenantId,
         [Parameter(Mandatory=$true)][string]$ClientId,
-        [Parameter(Mandatory=$true)][string]$ClientSecret
+        [string]$ClientSecret  # Optional: if not provided, attempt certificate-based auth
     )
-    $body = @{
-        client_id     = $ClientId
-        client_secret = $ClientSecret
-        scope         = "https://graph.microsoft.com/.default"
-        grant_type    = "client_credentials"
+    
+    if ($ClientSecret) {
+        # Use client_secret flow (legacy)
+        try {
+            $body = @{
+                client_id     = $ClientId
+                client_secret = $ClientSecret
+                scope         = "https://graph.microsoft.com/.default"
+                grant_type    = "client_credentials"
+            }
+            $resp = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" -Body $body
+            return $resp.access_token
+        } catch {
+            Write-Warning "Failed to acquire Graph token via client_secret: $($_.Exception.Message)"
+            return $null
+        }
+    } else {
+        # No client secret: attempt certificate-based auth via Get-AzAccessToken
+        try {
+            $at = Get-Command Get-AzAccessToken -ErrorAction SilentlyContinue
+            if ($at) {
+                $t = Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com/"
+                if ($t -and $t.Token) {
+                    # Convert SecureString token to plaintext safely
+                    $tokenPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($t.Token)
+                    try {
+                        $token = [Runtime.InteropServices.Marshal]::PtrToStringAuto($tokenPtr)
+                    } finally {
+                        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPtr)
+                    }
+                    Write-Host "Acquired Graph token via certificate for SharePoint"
+                    return $token
+                }
+            }
+        } catch {
+            Write-Warning "Failed to acquire Graph token via Az module: $($_.Exception.Message)"
+        }
+        return $null
     }
-    $resp = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" -Body $body
-    $resp.access_token
 }
 
 # Generic REST invoker with retry/backoff for 429/5xx
@@ -519,13 +550,14 @@ if (Test-Path $configPath) {
 }
 
 # --- Configurable Paths (with intelligent defaults) ---
-# Use config values if available, otherwise fallback to defaults
+# Initialize FIRST, before any DPAPI or Key Vault logic, so paths are always set
 if ($config.SecureDataFolder) {
     $secureCandidate = $config.SecureDataFolder
     if (Test-Path $secureCandidate) {
         $SecureDataFolder = $secureCandidate
     } else {
         Write-Warning "SecureDataFolder from config not found: $secureCandidate. Using fallback."
+        $SecureDataFolder = if (Test-Path "C:\Secure") { "C:\Secure" } else { Join-Path $env:USERPROFILE "AppData\Local\DeviceScope\Secure" }
     }
 } else {
     $SecureDataFolder = if (Test-Path "C:\Secure") { "C:\Secure" } else { Join-Path $env:USERPROFILE "AppData\Local\DeviceScope\Secure" }
@@ -537,6 +569,7 @@ if ($config.LogsFolder) {
         $LogsFolder = $logsCandidate
     } else {
         Write-Warning "LogsFolder from config not found: $logsCandidate. Using fallback."
+        $LogsFolder = if (Test-Path "C:\Logs") { "C:\Logs" } else { Join-Path $env:TEMP "DeviceScope" }
     }
 } else {
     $LogsFolder = if (Test-Path "C:\Logs") { "C:\Logs" } else { Join-Path $env:TEMP "DeviceScope" }
@@ -549,26 +582,107 @@ $dataFolder = Join-Path -Path $dataFolder -ChildPath "data"
 $dataFolder = (Resolve-Path $dataFolder -ErrorAction Stop).Path
 # Use the resolved data folder for the merged export path
 $MergedExportPath = Join-Path -Path $dataFolder -ChildPath "DeviceScope_Merged.csv"
-$VerbosePaging       = $true    # prints paging URLs and counts for KACE/Sophos
 
-# ---- Entra / Intune (Microsoft Graph) ----
-$MgTenantId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgTenantId.bin")
-$MgClientId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgClientId.bin")
-$MgClientSecretPlain = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgClientSecret.bin")
-$SPClientSecret = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgClientSecret.bin")
+# Helper function to retrieve secrets from Key Vault (defined early for later use)
+function Get-KeyVaultSecretPlain {
+    param(
+        [Parameter(Mandatory=$true)][string]$VaultName,
+        [Parameter(Mandatory=$true)][string]$SecretName
+    )
+    try {
+        $s = Get-AzKeyVaultSecret -VaultName $VaultName -Name $SecretName -ErrorAction Stop
+        if ($null -eq $s) { return $null }
+        return Convert-SecureStringToPlainText -Secure $s.SecretValue
+    } catch {
+        Write-Warning "Failed to retrieve secret '$SecretName' from vault '$VaultName': $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# -----------------------------------------
+# Azure Key Vault bootstrap (certificate auth)
+# If `KeyVaultName` is present in config, authenticate using the service principal
+# certificate and fetch runtime secrets from Key Vault. Falls back to DPAPI files
+# if Key Vault retrieval is not configured or fails.
+try {
+    if ($config -and $config.KeyVaultName) {
+        Write-Host "Key Vault configuration detected. Preparing Az modules and authenticating..."
+
+        # Ensure helper Install function exists earlier (EnsureModule)
+        EnsureModule -ModuleName 'Az.Accounts'
+        EnsureModule -ModuleName 'Az.KeyVault'
+
+        # Pick bootstrap values from config
+        $BootstrapTenantId = $config.TenantId
+        $BootstrapClientId = $config.ClientId
+        $BootstrapThumb   = $config.CertificateThumbprint
+        $KeyVaultName     = $config.KeyVaultName
+
+        if (-not ($BootstrapTenantId -and $BootstrapClientId -and $BootstrapThumb -and $KeyVaultName)) {
+            Write-Warning "Incomplete Key Vault bootstrap configuration. Falling back to DPAPI secrets where available."
+        } else {
+            try {
+                Write-Host "Connecting to Azure using certificate thumbprint $BootstrapThumb"
+                Connect-AzAccount -ServicePrincipal -Tenant $BootstrapTenantId -ApplicationId $BootstrapClientId -CertificateThumbprint $BootstrapThumb -ErrorAction Stop
+                Write-Host "Authenticated to Azure for app $BootstrapClientId"
+
+                # Map secret names from config (expected present)
+                $kvSecrets = $config.KeyVaultSecrets
+                if ($kvSecrets) {
+                    $sophosIdName = $kvSecrets.SophosClientId
+                    $sophosSecretName = $kvSecrets.SophosClientSecret
+                    $kacePwName = $kvSecrets.KacePassword
+                    $entraSecretName = $kvSecrets.EntraClientSecret
+                }
+
+                # Fetch runtime secrets from Key Vault
+                if ($sophosIdName)     { $SophosClientId     = Get-KeyVaultSecretPlain -VaultName $KeyVaultName -SecretName $sophosIdName }
+                if ($sophosSecretName) { $SophosClientSecret = Get-KeyVaultSecretPlain -VaultName $KeyVaultName -SecretName $sophosSecretName }
+                if ($kacePwName)       { $KacePassword       = Get-KeyVaultSecretPlain -VaultName $KeyVaultName -SecretName $kacePwName }
+
+                # Entra: if config says 'Certificate-Only' then no client secret is expected
+                if ($entraSecretName -and ($entraSecretName -ne 'Certificate-Only')) {
+                    $SPClientSecret = Get-KeyVaultSecretPlain -VaultName $KeyVaultName -SecretName $entraSecretName
+                } else {
+                    # No client secret; rely on certificate for Graph auth where appropriate
+                    $SPClientSecret = $null
+                }
+
+                # Bootstrapped identifiers
+                if ($config.ClientId) { $MgClientId = $config.ClientId }
+                if ($config.TenantId) { $MgTenantId = $config.TenantId }
+                if ($config.KaceUsername) { $KaceUsername = $config.KaceUsername }
+
+                Write-Host "Key Vault secrets fetched (missing secrets will remain null)."
+            } catch {
+                Write-Warning "Azure authentication or Key Vault retrieval failed: $($_.Exception.Message). Falling back to DPAPI where available."
+            }
+        }
+    }
+} catch {
+    Write-Warning "Unexpected error during Key Vault bootstrap: $($_.Exception.Message)"
+}# ---- Entra / Intune (Microsoft Graph) ----
+# Only load from DPAPI if Key Vault did not already populate these
+if (-not $MgTenantId) { $MgTenantId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgTenantId.bin") }
+if (-not $MgClientId) { $MgClientId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgClientId.bin") }
+if (-not $SPClientSecret) { $MgClientSecretPlain = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "MgClientSecret.bin"); $SPClientSecret = $MgClientSecretPlain }
 $GraphProfile   = "v1.0"            # or "beta" if needed
 
 # ---- Sophos Central ----
-$SophosClientId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "SophosClientId.bin")
-$SophosClientSecret = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "SophosClientSecret.bin")
+# Only load from DPAPI if Key Vault did not already populate these
+if (-not $SophosClientId) { $SophosClientId     = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "SophosClientId.bin") }
+if (-not $SophosClientSecret) { $SophosClientSecret = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "SophosClientSecret.bin") }
 
 # ---- KACE SMA ----
 $KaceBaseUrl        = if ($config.KaceBaseUrl) { $config.KaceBaseUrl } else { "https://helpdesk.image.local" }
 $KaceOrganization   = if ($config.KaceOrganization) { $config.KaceOrganization } else { "Default" }
 $KaceApiVersion     = if ($config.KaceApiVersion) { $config.KaceApiVersion } else { "5" }
 $KacePageLimit      = if ($config.KacePageLimit) { $config.KacePageLimit } else { 1000 }
-$KaceUsername       = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "KaceUser.bin")
-$KacePassword       = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "KacePw.bin")
+# Only load from DPAPI if Key Vault did not already populate these
+if (-not $KaceUsername) { $KaceUsername       = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "KaceUser.bin") }
+if (-not $KacePassword) { $KacePassword       = Get-DpapiSecret -Path (Join-Path $SecureDataFolder "KacePw.bin") }
+
+$VerbosePaging       = $true    # prints paging URLs and counts for KACE/Sophos
 
 # ---- SharePoint Upload Config ----
 # Either hardcode the share link, or load from config file (more portable):
@@ -608,52 +722,87 @@ $DeleteLogPath = Join-Path $LogsFolder "DeviceScope_Delete.log"
 $entraFlat  = @()
 $intuneFlat = @()
 try {
-    # Skip if credentials are missing
-    if (-not ($MgTenantId -and $MgClientId -and $SPClientSecret)) {
-        Write-Warning "Missing Graph credentials; skipping Entra/Intune."
+    # If we have a client secret, use the OAuth token endpoint. Otherwise, if Az session is available
+    # (certificate-based Connect-AzAccount succeeded), use Get-AzAccessToken to get a Graph token.
+    if (-not ($MgTenantId -and $MgClientId) -and -not $SPClientSecret) {
+        Write-Warning "Missing Graph identifiers; skipping Entra/Intune."
     } else {
-        # Get access token using client credentials
-        $tokenBody = @{
-            client_id     = $MgClientId
-            client_secret = $SPClientSecret
-            scope         = "https://graph.microsoft.com/.default"
-            grant_type    = "client_credentials"
+        if ($SPClientSecret) {
+            # Get access token using client credentials (client secret)
+            try {
+                $tokenBody = @{ client_id = $MgClientId; client_secret = $SPClientSecret; scope = "https://graph.microsoft.com/.default"; grant_type = "client_credentials" }
+                $tokenResp = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$MgTenantId/oauth2/v2.0/token" -Body $tokenBody
+                $accessToken = $tokenResp.access_token
+                $headers = @{ Authorization = "Bearer $accessToken" }
+            } catch {
+                Write-Warning "Failed to acquire token via client_secret: $($_.Exception.Message)"
+                $accessToken = $null; $headers = $null
+            }
+        } else {
+            # No client secret: attempt to use Az module's Get-AzAccessToken (certificate auth via Connect-AzAccount)
+            try {
+                $at = Get-Command Get-AzAccessToken -ErrorAction SilentlyContinue
+                if ($at) {
+                    $t = Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com/"
+                    if ($t -and $t.Token) {
+                        # Convert SecureString token to plaintext safely
+                        $tokenPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($t.Token)
+                        try {
+                            $accessToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto($tokenPtr)
+                        } finally {
+                            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPtr)
+                        }
+                        $headers = @{ Authorization = "Bearer $accessToken" }
+                        Write-Host "Acquired Graph token via certificate (Get-AzAccessToken)"
+                    } else {
+                        Write-Warning "Get-AzAccessToken returned no token. Skipping Entra/Intune."
+                        $accessToken = $null; $headers = $null
+                    }
+                } else {
+                    Write-Warning "Get-AzAccessToken not available. Ensure Az.Accounts module is loaded and authenticated. Skipping Entra/Intune."
+                    $accessToken = $null; $headers = $null
+                }
+            } catch {
+                Write-Warning "Failed to acquire token via Az module: $($_.Exception.Message)"
+                $accessToken = $null; $headers = $null
+            }
         }
-        $tokenResp = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$MgTenantId/oauth2/v2.0/token" -Body $tokenBody
-        $accessToken = $tokenResp.access_token
-        $headers = @{ Authorization = "Bearer $accessToken" }
+        
+        if (-not $headers) {
+            Write-Warning "No access token available; skipping Entra/Intune."
+            $entraFlat = @()
+            $intuneFlat = @()
+        } else {
+            $uri = "https://graph.microsoft.com/v1.0/devices?`$select=*"
+            do {
+                $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers
+                if ($resp.value) { $entraAll += $resp.value }
+                $uri = $resp.'@odata.nextLink'
+            } while ($uri)
 
-        # Fetch Entra devices with pagination
-        $entraAll = @()
-        $uri = "https://graph.microsoft.com/v1.0/devices?`$select=*"
-        do {
-            $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers
-            if ($resp.value) { $entraAll += $resp.value }
-            $uri = $resp.'@odata.nextLink'
-        } while ($uri)
+            $entraFlat = $entraAll | ForEach-Object {
+                $flat = FlattenObject -obj $_ -prefix 'Entra'
+                $flat['Source'] = 'Entra'
+                [PSCustomObject]$flat
+            }
 
-        $entraFlat = $entraAll | ForEach-Object {
-            $flat = FlattenObject -obj $_ -prefix 'Entra'
-            $flat['Source'] = 'Entra'
-            [PSCustomObject]$flat
+            # Fetch Intune managed devices with pagination
+            $intuneAll = @()
+            $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$select=*"
+            do {
+                $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers
+                if ($resp.value) { $intuneAll += $resp.value }
+                $uri = $resp.'@odata.nextLink'
+            } while ($uri)
+
+            $intuneFlat = $intuneAll | ForEach-Object {
+                $flat = FlattenObject -obj $_ -prefix 'Intune'
+                $flat['Source'] = 'Intune'
+                [PSCustomObject]$flat
+            }
+
+            Write-Host "Entra: fetched $($entraFlat.Count) devices; Intune: fetched $($intuneFlat.Count) devices"
         }
-
-        # Fetch Intune managed devices with pagination
-        $intuneAll = @()
-        $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$select=*"
-        do {
-            $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers
-            if ($resp.value) { $intuneAll += $resp.value }
-            $uri = $resp.'@odata.nextLink'
-        } while ($uri)
-
-        $intuneFlat = $intuneAll | ForEach-Object {
-            $flat = FlattenObject -obj $_ -prefix 'Intune'
-            $flat['Source'] = 'Intune'
-            [PSCustomObject]$flat
-        }
-
-        Write-Host "Entra: fetched $($entraFlat.Count) devices; Intune: fetched $($intuneFlat.Count) devices"
     }
 } catch {
     Write-Warning "Graph REST calls failed: $($_.Exception.Message). Continuing without Entra/Intune."
@@ -1075,8 +1224,12 @@ try {
         throw "Local CSV not found: $TimestampedExportPath"
     }
     
-    # Get Graph token
+    # Get Graph token (certificate-based if no client secret, otherwise client_secret flow)
     $AccessToken = Get-GraphAccessToken -TenantId $MgTenantId -ClientId $MgClientId -ClientSecret $SPClientSecret
+    
+    if (-not $AccessToken) {
+        throw "Unable to acquire Graph access token for SharePoint upload"
+    }
 
     # Resolve destination folder via share link
     $Target = Resolve-TargetFolder -ShareUrl $TargetFolderShareLink -AccessToken $AccessToken
