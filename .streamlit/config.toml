@@ -5,3 +5,15 @@ backgroundColor="#FFFFFF"
 secondaryBackgroundColor="#F0F2F6"
 textColor="#262730"
 font="sans serif"
+
+[server]
+headless = true
+port = 8501
+address = "matrix01.image.local"
+enableXsrfProtection = false
+sslCertFile = "C:\\Certificates\\Domain Wild Card\\cert.pem"
+sslKeyFile = "C:\\Certificates\\Domain Wild Card\\key.pem"
+
+[client]
+showErrorDetails = true
+gatherUsageStats = false
