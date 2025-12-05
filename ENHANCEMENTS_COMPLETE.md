@@ -1,33 +1,7 @@
 # Enhancements Implementation - Complete Summary
 
-**Date:** December 1, 2025  
-**Status:** ✅ All 4 enhancements implemented, tested, and production-ready
-
----
-
-## Overview
-
-This document summarizes the four enhancements completed for the Device Scope Dashboard application to improve maintainability, security, testability, and operational deployment readiness.
-
-### Enhancement Summary Table
-
-| # | Enhancement | Status | Files | Impact |
-|---|---|---|---|---|
-| 1 | Column mapping consolidation | ✅ Complete | `streamlit_app.py` | Reduced duplication, easier maintenance |
-| 2 | Config.json externalization + Key Vault integration | ✅ Complete | `config.json`, `scripts/AllDeviceExports_Merge.ps1` | Portable, secure, credential rotation |
-| 3 | Unit tests for helper functions | ✅ Complete | `test_streamlit_app.py` | 25/25 tests passing, regression protection |
-| 4 | DPAPI secret initialization script | ✅ Complete | `scripts/Initialize-DpapiSecrets.ps1` | Automated secret setup (deprecated in favor of Key Vault) |
-
-### Major Operational Improvement: **Key Vault + Certificate Authentication** (NEW)
-
-**Date Added:** December 1, 2025
-
-In addition to the original 4 enhancements, the deployment strategy has been significantly upgraded:
-
-- **Before:** Secrets stored locally as DPAPI-encrypted .bin files; app auth via Entra client secret
-- **After:** Secrets fetched at runtime from Azure Key Vault; app auth via certificate-based service principal (no client secret)
-
-This major improvement is documented below.
+**Date:** November 30, 2025  
+**Status:** ✅ All 4 enhancements implemented and tested
 
 ---
 
@@ -369,107 +343,17 @@ Recommended future enhancements:
 
 ---
 
-## 5. ✅ Key Vault + Certificate-Based Authentication (NEW – Production Enhancement)
-
-**Date Added:** December 1, 2025  
-**Files Modified:** `scripts/AllDeviceExports_Merge.ps1`, `config.json`, `scripts/test-keyvault-auth.ps1`  
-**Status:** ✅ Implemented, tested, and validated on production host
-
-### Overview
-This enhancement replaces client-secret authentication with certificate-based service principal authentication, moving from local DPAPI-encrypted secrets to runtime Key Vault retrieval. This provides:
-- **Zero local secrets**: No .bin files on disk; all secrets fetched from Key Vault at startup
-- **Credential rotation without restart**: Update secrets in Key Vault; no service restart needed
-- **Safer audit trail**: Certificate + Key Vault both log access; no plaintext credentials in memory longer than needed
-- **Enterprise-ready**: gMSA + certificate auth is standard in high-security environments
-
-### Technical Implementation
-
-**Config Changes (`config.json`):**
-```json
-{
-  "TenantId": "225c5a79-6119-452c-8fc3-e0dfa2ce9212",
-  "ClientId": "05fbf991-9ba3-43e5-9e5b-2e708215bf66",
-  "CertificateThumbprint": "d933e750a76acaa9da82ceb06a230a89c9898fac",
-  "CertificateStoreLocation": "LocalMachine\\My",
-  "KeyVaultName": "kv-cvb-prod-westus2-core",
-  "KeyVaultSecrets": {
-    "SophosClientId": "DeviceScopeApp-SophosClientID",
-    "SophosClientSecret": "DeviceScopeApp-SophosClientSecret",
-    "KacePassword": "DeviceScopeApp-KACEPassword-nV"
-  },
-  "KaceUsername": "nvalentine",
-  "SecureDataFolder": "C:\\apps\\device-scope-dashboard-v2\\logs",
-  "LogsFolder": "C:\\apps\\device-scope-dashboard-v2\\logs"
-}
-```
-
-**PowerShell Script Changes (`scripts/AllDeviceExports_Merge.ps1`):**
-- Lines 560–613: Certificate-based `Connect-AzAccount` to Azure using service principal
-- Lines 547–558: `Get-KeyVaultSecretPlain()` helper function to retrieve secrets from Key Vault
-- Lines 630–655: Runtime secret fetching from Key Vault (with fallback to DPAPI if Key Vault unavailable)
-- Lines 697–735: Certificate-based Graph token acquisition via `Get-AzAccessToken` (no client_secret needed)
-
-**Authentication Flow:**
-1. Script loads `config.json` with Tenant ID, Client ID, certificate thumbprint, and Key Vault name
-2. Script calls `Connect-AzAccount -ServicePrincipal -CertificateThumbprint <thumbprint>`
-3. Certificate is loaded from `LocalMachine\My` store (gMSA must have private key read access)
-4. Script fetches secrets: `Get-AzKeyVaultSecret` retrieves Sophos/KACE credentials
-5. For Graph API calls: if no client secret is present, script uses `Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com/"` to acquire token via certificate
-6. All secrets held in memory only; none written to disk
-
-### Deployment Prerequisites
-- ✅ Certificate (thumbprint: `d933e750...`) installed in `LocalMachine\My` on target host
-- ✅ Entra app registration has certificate uploaded (not client secret)
-- ✅ Entra app has **Application** permissions for Microsoft Graph (Device.Read.All, DeviceManagementManagedDevices.Read.All, Files.ReadWrite.All)
-- ✅ gMSA account has Read access to certificate private key
-- ✅ gMSA account has Key Vault User role on the vault
-
-### Testing & Validation
-- ✅ Test script `scripts/test-keyvault-auth.ps1` validates certificate auth and secret retrieval
-- ✅ On production host: `Connect-AzAccount succeeded` confirmed
-- ✅ All 3 Key Vault secrets retrieved successfully (Sophos ID: 36 chars, Sophos secret: 100 chars, KACE password: 22 chars)
-- ✅ Graph API call to `GET /v1.0/devices?$top=1` succeeded with certificate-based token
-- ✅ End-to-end export script runs without error; CSV generated with Entra/Intune/AD/Sophos/KACE data
-
-### Files Added/Modified
-| File | Type | Purpose |
-|------|------|---------|
-| `config.json` | Modified | Now includes Key Vault bootstrap config (TenantId, ClientId, CertificateThumbprint, KeyVaultName, KeyVaultSecrets mapping) |
-| `scripts/AllDeviceExports_Merge.ps1` | Modified | Added Az module setup, certificate-based Connect-AzAccount, Key Vault secret retrieval, certificate-based Graph token acquisition |
-| `scripts/test-keyvault-auth.ps1` | Modified | Enhanced with robust config path discovery and certificate auth validation |
-| `DEPLOYMENT_GUIDE.md` | New | Comprehensive Windows Service deployment guide (7 phases, 14 steps) |
-
-### Operational Benefits
-1. **Credential Rotation:** Update Sophos/KACE passwords in Azure Key Vault; no code change or service restart needed
-2. **No Local Secrets:** Eliminates .bin files on disk; reduces attack surface
-3. **Audit Trail:** All Key Vault access is logged in Azure audit; all certificate usage is auditable
-4. **Scalability:** Multiple servers can share the same Key Vault and certificate; no per-host secret management
-5. **gMSA Integration:** Group managed service account password is managed by AD automatically; no manual password resets
-
-### Deployment Instructions
-See `DEPLOYMENT_GUIDE.md` for complete step-by-step instructions:
-- Phase 1: Prepare the host (folders, copy files)
-- Phase 2: Python/PowerShell environment setup
-- Phase 3: Certificate private key permissions for gMSA
-- Phase 4: Validate auth/Key Vault access
-- Phase 5: Create Windows Service with NSSM
-- Phase 6: Firewall and access configuration
-- Phase 7: Schedule PowerShell export script (optional)
-
----
-
 ## Support
 
 All enhancements are fully documented:
 - **Developers:** See `ENHANCEMENTS.md` for technical details
-- **IT Ops:** See `DEPLOYMENT_GUIDE.md` for production deployment and operations
-- **Operators:** See `scripts/test-keyvault-auth.ps1` for troubleshooting certificate auth
+- **IT Ops:** See `scripts/Initialize-DpapiSecrets.ps1` for setup instructions
 - **Testers:** See `test_streamlit_app.py` for test examples
 - **Contributors:** All code is well-commented and follows existing patterns
 
 ---
 
-**Status: Production-Ready ✅**
+**Status: Ready for Production ✅**
 
-All 4 original enhancements plus the Key Vault/certificate integration have been implemented, tested on a production host, and are ready for immediate deployment to Windows Server with gMSA. The system is backward compatible (DPAPI fallback still available) and follows enterprise security best practices.
+All enhancements have been implemented, tested, and documented. The system is backward compatible and ready for deployment to production environments.
 
