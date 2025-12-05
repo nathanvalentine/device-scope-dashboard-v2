@@ -1,0 +1,14 @@
+[2025-12-01 02:28:12] FAILURE: Cannot bind argument to parameter 'ClientSecret' because it is an empty string.
+[2025-12-01 02:40:41] FAILURE: Cannot bind argument to parameter 'ClientSecret' because it is an empty string.
+[2025-12-01 03:10:28] FAILURE: Cannot bind argument to parameter 'ClientSecret' because it is an empty string.
+[2025-12-01 03:33:00] HTTP GET https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9jYWNoZXZhbGxleWJhbmsuc2hhcmVwb2ludC5jb20vOmY6L3MvbTM2NWFwcGJ1aWxkZXItZGV2aWNlc2NvcGUtMTExMC9JZ0E3X2MwMFNJUTJRS3BUaGZXamlNVC1BV2xlVVpXT1htYnV0cHpVS3Y0YWtNVT9lPUNQMXdlYQ/driveItem (attempt 1)
+[2025-12-01 03:33:00] HTTP PUT https://graph.microsoft.com/v1.0/drives/b!u0VrVqMqKEqRAUcFLyXM7nEO44VlP5dGv2u4lUcY7acsyWFyjOooTLN0civruKm2/items/01GZY4V6Z37XGTISEEGZAKUU4F6WRYRRH6:/DeviceScope_Merged_2025-12-01_033300.csv:/content (attempt 1)
+[2025-12-01 03:33:01] Uploaded (small) DeviceScope_Merged_2025-12-01_033300.csv
+[2025-12-01 03:33:01] HTTP GET https://graph.microsoft.com/v1.0/drives/b!u0VrVqMqKEqRAUcFLyXM7nEO44VlP5dGv2u4lUcY7acsyWFyjOooTLN0civruKm2/items/01GZY4V6Z37XGTISEEGZAKUU4F6WRYRRH6/children?$select=name,id,lastModifiedDateTime (attempt 1)
+[2025-12-01 03:33:01] SUCCESS: DeviceScope_Merged_2025-12-01_033300.csv uploaded to drive=b!u0VrVqMqKEqRAUcFLyXM7nEO44VlP5dGv2u4lUcY7acsyWFyjOooTLN0civruKm2 parent=01GZY4V6Z37XGTISEEGZAKUU4F6WRYRRH6
+[2025-12-01 06:05:30] HTTP GET https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9jYWNoZXZhbGxleWJhbmsuc2hhcmVwb2ludC5jb20vOmY6L3MvbTM2NWFwcGJ1aWxkZXItZGV2aWNlc2NvcGUtMTExMC9JZ0E3X2MwMFNJUTJRS3BUaGZXamlNVC1BV2xlVVpXT1htYnV0cHpVS3Y0YWtNVT9lPUNQMXdlYQ/driveItem (attempt 1)
+[2025-12-01 06:05:31] HTTP PUT https://graph.microsoft.com/v1.0/drives/b!u0VrVqMqKEqRAUcFLyXM7nEO44VlP5dGv2u4lUcY7acsyWFyjOooTLN0civruKm2/items/01GZY4V6Z37XGTISEEGZAKUU4F6WRYRRH6:/DeviceScope_Merged_2025-12-01_060530.csv:/content (attempt 1)
+[2025-12-01 06:05:31] Uploaded (small) DeviceScope_Merged_2025-12-01_060530.csv
+[2025-12-01 06:05:32] HTTP GET https://graph.microsoft.com/v1.0/drives/b!u0VrVqMqKEqRAUcFLyXM7nEO44VlP5dGv2u4lUcY7acsyWFyjOooTLN0civruKm2/items/01GZY4V6Z37XGTISEEGZAKUU4F6WRYRRH6/children?$select=name,id,lastModifiedDateTime (attempt 1)
+[2025-12-01 06:05:32] SUCCESS: DeviceScope_Merged_2025-12-01_060530.csv uploaded to drive=b!u0VrVqMqKEqRAUcFLyXM7nEO44VlP5dGv2u4lUcY7acsyWFyjOooTLN0civruKm2 parent=01GZY4V6Z37XGTISEEGZAKUU4F6WRYRRH6
+[2025-12-01 06:46:14] FAILURE: Cannot bind argument to parameter 'TenantId' because it is an empty string.
