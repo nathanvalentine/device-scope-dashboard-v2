@@ -1,6 +1,17 @@
 {
+  "TenantId": "225c5a79-6119-452c-8fc3-e0dfa2ce9212",
+  "ClientId": "05fbf991-9ba3-43e5-9e5b-2e708215bf66",
+  "CertificateThumbprint": "d933e750a76acaa9da82ceb06a230a89c9898fac",
+  "CertificateStoreLocation": "LocalMachine\\My",
+  "KeyVaultName": "kv-cvb-prod-westus2-core",
+  "KeyVaultSecrets": {
+    "SophosClientId": "DeviceScopeApp-SophosClientID",
+    "SophosClientSecret": "DeviceScopeApp-SophosClientSecret",
+    "KacePassword": "DeviceScopeApp-KACEPassword-nV"
+  },
+  "KaceUsername": "nvalentine",
   "SecureDataFolder": "C:\\Secure",
-  "LogsFolder": "C:\\Logs",
+  "LogsFolder": "C:\\apps\\device-scope-dashboard-v2\\logs",
   "DpapiSecrets": {
     "MgTenantId": "MgTenantId.bin",
     "MgClientId": "MgClientId.bin",
@@ -14,5 +25,6 @@
   "KaceOrganization": "Default",
   "KaceApiVersion": "5",
   "KacePageLimit": 1000,
-  "RetentionDays": 30
+  "RetentionDays": 30,
+  "CacheSecretsToDpapi": false
 }
