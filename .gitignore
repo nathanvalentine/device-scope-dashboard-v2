@@ -1,0 +1,62 @@
+# ------------------------
+# Virtual Environments
+# ------------------------
+venv/
+.venv/
+env/
+
+# ------------------------
+# Build outputs (WPF/.NET)
+# ------------------------
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+
+# ------------------------
+# Python / Streamlit
+# ------------------------
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# ------------------------
+# Logs and temp files
+# ------------------------
+*.log
+logs/
+temp/
+*.tmp
+
+# ------------------------
+# Environment configs
+# ------------------------
+.env
+.env.*
+*.local.json
+config.json
+
+# ------------------------
+# IDE / Editor settings
+# ------------------------
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+
+# ------------------------
+# Data files
+# ------------------------
+data/*.csv
+*.db-journal
+
+# ------------------------
+# OS-specific
+# ------------------------
+Thumbs.db
+.DS_Store
