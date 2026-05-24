@@ -10,10 +10,13 @@ font="sans serif"
 headless = true
 port = 8501
 address = "matrix01.image.local"
+#address = "localhost"
 enableXsrfProtection = false
 sslCertFile = "C:\\Certificates\\Domain Wild Card\\cert.pem"
 sslKeyFile = "C:\\Certificates\\Domain Wild Card\\key.pem"
 
 [client]
 showErrorDetails = true
+
+[browser]
 gatherUsageStats = false
