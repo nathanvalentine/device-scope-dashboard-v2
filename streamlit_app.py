@@ -132,15 +132,28 @@ overview_display_to_actual = {**DEVICE_CORE_FIELDS, **OVERVIEW_SPECIFIC_FIELDS}
 # ---------- Data loading ----------
 # ==================================
 
-# ---------- HELPER: Normalize string booleans to Python bool ----------
+# ---------- HELPER: Normalize string booleans to pandas nullable boolean ----------
 def normalize_bool_column(series):
     """
-    Convert string booleans ('true'/'false'/'1'/'0') and mixed types to Python bool.
+    Convert string booleans ('true'/'false'/'1'/'0') and mixed types
+    to pandas nullable boolean type.
     Handles case-insensitivity and whitespace.
     """
-    return series.astype(str).str.strip().str.lower()\
-        .replace({"true": True, "false": False, "1": True, "0": False})\
-        .astype(bool)
+    cleaned = (
+        series.astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    # ✅ Use map instead of replace to avoid pandas downcasting warning entirely
+    mapped = cleaned.map({
+        "true": True,
+        "false": False,
+        "1": True,
+        "0": False
+    })
+
+    return mapped.astype("boolean")
 
 # ---------- HELPER: Get existing columns from mapping dict ----------
 def get_existing_columns(mapping_dict, dataframe):
@@ -511,7 +524,7 @@ association_data = pd.DataFrame({
 c1, c2 = st.columns((7,3))
 with c1:
     st.markdown('### Heatmap')
-    st.altair_chart(heatmap_chart, use_container_width=True)
+    st.altair_chart(heatmap_chart, width='stretch')
 with c2:
     st.markdown('### Device context chart')
     # if context_theta == "Context Association":
@@ -520,7 +533,7 @@ with c2:
     #         theta="DeviceCount",
     #         color="ContextsPresent",  # 1, 2, 3, 4, 5
     #         legend='bottom',
-    #         use_container_width=True
+    #         width='stretch'
     #     )
     # elif context_theta == "Per context (count)":
     #     plost.donut_chart(
@@ -528,19 +541,19 @@ with c2:
     #         theta="DeviceCount",
     #         color="Context",  # InEntra, InIntune, etc.
     #         legend='bottom',
-    #         use_container_width=True
+    #         width='stretch'
     #     )
     plost.donut_chart(
         data=association_data,
         theta="DeviceCount",
         color="ContextsPresent",  # 1, 2, 3, 4, 5
         legend='bottom',
-        use_container_width=True
+        width='stretch'
     )
 
 # ---------- Row C ----------
 st.markdown('### Data table')
-st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+st.dataframe(filtered_df, width='stretch', hide_index=True)
 
 # ---------- Row D ----------
 # Only keep columns that exist in the DataFrame
@@ -557,6 +570,9 @@ overview_df = pd.DataFrame({
     "Property": display_names,
     "Value": values
 })
+
+# ✅ Force mixed-type column to be Arrow-safe for Streamlit rendering
+overview_df["Value"] = overview_df["Value"].astype(str)
 
 # Display device overview
 st.markdown(f"### Device Overview: {selected_device}")
