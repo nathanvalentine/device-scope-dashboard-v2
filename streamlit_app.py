@@ -580,11 +580,6 @@ col3.metric("Multi-instance devices", f"{multi_instance:,}")
 # ---------- Row B ----------
 # Pull context columns for Heatmap and Donut Chart
 context_cols_renamed = PRESENCE_BOOL_COLS_RENAMED
-# Ensure boolean and numeric columns (Copilot eliminated this with normalization helper functions above)
-#for col in context_cols_renamed:
-#    df_view[col] = normalize_bool_column(df_view[col])
-df_view["Entra Device Instance Count"] = pd.to_numeric(df_view["Entra Device Instance Count"], errors="coerce").fillna(0)
-df_view["Sophos Device Instance Count"] = pd.to_numeric(df_view["Sophos Device Instance Count"], errors="coerce").fillna(0)
 
 # Build adjusted heatmap
 heatmap_matrix = pd.DataFrame(0, index=context_cols_renamed, columns=context_cols_renamed)
@@ -619,13 +614,6 @@ heatmap_chart = alt.Chart(heatmap_data).mark_rect().encode(
 
 # Calculate how many contexts each device is in for Donut Chart
 context_cols = PRESENCE_BOOL_COLS
-# (Copilot eliminated this with normalization helper functions above)
-#for col in context_cols:
-#    df[col] = normalize_bool_column(df[col])
-
-# (Copilot eliminated this with normalization helper functions above)
-#df["Entra_InstanceCount"] = pd.to_numeric(df["Entra_InstanceCount"], errors="coerce").fillna(0)
-#df["Sophos_InstanceCount"] = pd.to_numeric(df["Sophos_InstanceCount"], errors="coerce").fillna(0)
 
 # Calculate number of contexts present per device
 df["ContextsPresent"] = df[context_cols].sum(axis=1)
@@ -686,52 +674,6 @@ with c2:
 # ---------- Row C ----------
 st.markdown('### Data table')
 st.dataframe(filtered_df, width='stretch', hide_index=True)
-
-# # ---------- Row D ----------
-# # Only keep columns that exist in the DataFrame
-# existing_actual = get_existing_columns(overview_display_to_actual, df)
-
-# # Filter for the selected device
-# device_row = df[df['Name'] == selected_device][existing_actual]
-
-# # Build overview DataFrame with display names
-# display_names = [display for display, actual in overview_display_to_actual.items() if actual in existing_actual]
-# # The following line was causing some of the values to be rendered as a series instead of a single value, which was breaking the table display. By ensuring we take the first value from the series (if it exists) or default to an empty string, we can avoid this issue and ensure the overview table renders correctly.
-# #values = [device_row.iloc[0][actual] if not device_row.empty else "" for actual in existing_actual]
-# # Copilot provided this improved version of the above line to handle the case where the column returns a series instead of a single value, which can happen if the column contains list-like data or if there are multiple rows (though we expect only one row per device name). This version checks if the device_row is not empty and then safely accesses the first row's value for each actual column, while also handling missing columns or NaN values by defaulting to an empty string.
-# if not device_row.empty:
-#     values = []
-
-#     for actual in existing_actual:
-#         if actual in device_row.columns:
-#             val = device_row[actual].iloc[0]  # ✅ ALWAYS scalar
-
-#             if pd.isna(val):
-#                 val = ""
-
-#         else:
-#             val = ""
-
-#         values.append(val)
-
-# else:
-#     values = [""] * len(existing_actual)
-
-# overview_df = pd.DataFrame({
-#     "Property": display_names,
-#     "Value": values
-# })
-
-# # ✅ Force mixed-type column to be Arrow-safe for Streamlit rendering
-# # (Copilot suggested adding .fillna("") to this after the normalization helper functions above caused empty values to be rendered as nan)
-# overview_df["Value"] = overview_df["Value"].fillna("").astype(str)
-
-# # Display device overview
-# st.markdown(f"### Device Overview: {selected_device}")
-# if not overview_df.empty:
-#     st.table(overview_df)
-# else:
-#     st.warning("No data found for the selected device.")
 
 # ---------- Row D ----------
 st.markdown(f"### Device Overview: {selected_device}")
