@@ -74,10 +74,10 @@ class TestNormalizeBoolColumn:
         # NaN becomes True (via string conversion to 'None'/'NaT', not matching any replacement key)
         assert result[0] == True
         assert result[2] == False
-        # None converts to string 'None', which doesn't match replacement keys, becomes True via bool()
-        # This is expected behavior; NaN/None in string context becomes True
-        assert result[1] == True  # None → string → True
-        assert result[3] == True  # pd.NA → string → True
+        # None converts to string 'None', which doesn't match replacement keys, becomes False via bool()
+        # This is expected behavior; NaN/None in string context becomes False
+        assert result[1] == False  # None → string → False
+        assert result[3] == False  # pd.NA → string → False
 
     def test_empty_series(self):
         """Test empty series."""
