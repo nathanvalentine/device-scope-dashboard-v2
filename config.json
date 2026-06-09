@@ -7,7 +7,8 @@
   "KeyVaultSecrets": {
     "SophosClientId": "DeviceScopeApp-SophosClientID",
     "SophosClientSecret": "DeviceScopeApp-SophosClientSecret",
-    "KacePassword": "DeviceScopeApp-KACEPassword-nV"
+    "KacePassword": "DeviceScopeApp-KACEPassword-nV",
+    "EventSentryDbPassword": "DeviceScopeApp-EventSentryPostgresPassword"
   },
   "KaceUsername": "nvalentine",
   "SecureDataFolder": "C:\\Secure",
@@ -26,5 +27,9 @@
   "KaceApiVersion": "5",
   "KacePageLimit": 1000,
   "RetentionDays": 30,
+  "EventSentryDbHost": "eventsentry.image.local",
+  "EventSentryDbPort": 5432,
+  "EventSentryDbName": "EventSentry",
+  "EventSentryDbUser": "postgres",
   "CacheSecretsToDpapi": false
 }
