@@ -57,26 +57,37 @@ label.css-mkogse.e16fv1kl2 {
   opacity: 0.85;
 }
 
-/* Move block container higher */
-div.block-container.css-18e3th9.egzxvld2 {
-  margin-top: -5em;
+/* Reduce the default top gap above the page heading.
+   CONFIRMED via browser inspection (not guessed): the actual element is
+   <div class="stMainBlockContainer block-container st-emotion-cache-zy6yx3 eqt0gmo4">.
+   Two real mistakes in earlier attempts at this fix, both now corrected:
+   1. stMainBlockContainer and block-container are CSS CLASSES, not
+      data-testid attributes - [data-testid="stMainBlockContainer"]
+      could never match a class name no matter how correct the name
+      itself was. Using .stMainBlockContainer / .block-container here
+      instead - confirmed real, not a generated hash like the original
+      broken rule's css-18e3th9/egzxvld2.
+   2. The visible gap sits in the element's MARGIN, not its padding
+      (confirmed via the DevTools box-model overlay) - the original
+      developer's margin-top: -5em was targeting the right property
+      all along; switching to padding-top in an earlier pass here was
+      a mistake. Reverted to margin-top, just with a smaller, safer
+      starting value than -5em and the correct, confirmed selector.
+   -2rem is a starting point, not a verified-correct final value -
+   nudge it further negative if the gap is still larger than wanted,
+   or less negative if content starts sliding under Streamlit's own
+   top toolbar (Deploy button / overflow menu). */
+.stMainBlockContainer,
+.block-container {
+  margin-top: -2rem !important;
 }
 
 
-/* Hide hamburger menu and footer */
-div.css-r698ls.e8zbici2 {
-  display: none;
-}
-
-footer.css-ipbk5a.egzxvld4 {
-  display: none;
-}
-
-footer.css-12gp8ed.eknhn3m4 {
-  display: none;
-}
+/* Hamburger menu / footer hiding rules removed - confirmed dead
+   (same root cause: auto-generated, version-specific class names from
+   an old Streamlit build). If hiding these is still wanted, that's a
+   separate follow-up using the same stable-selector approach above. */
 
 div.vg-tooltip-element {
   display: none;
 }
-
