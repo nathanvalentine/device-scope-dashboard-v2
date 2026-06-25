@@ -1,6 +1,6 @@
 # DeviceScope Dashboard — Project Reference
 
-**Last updated:** 2026-06-23
+**Last updated:** 2026-06-25
 **Purpose of this document:** a single, current reference for the DeviceScope dashboard's architecture and the full set of changes made since the CSV→SQLite migration. The other files in `markdown/` (CLEANUP_ANALYSIS.md, ENHANCEMENTS.md, FINAL_REPORT.md, etc.) are point-in-time development snapshots and are likely stale relative to this document — treat this one as the source of truth going forward, and update it as the project continues to evolve.
 
 ---
@@ -59,7 +59,7 @@ device-scope-dashboard-v2/
 
 **Pipeline flow:** `Invoke-DeviceScopePipeline.ps1` runs each collector (writing to its own raw table, independent of the others' success/failure), logs each run to `source_run_log`, then re-applies `02_views.sql`. The Streamlit "🔄 Refresh Device Data" button triggers this same script via `subprocess`.
 
-**Deployment:** Streamlit runs via NSSM as a Windows service, bound to `0.0.0.0:8501`, with **no reverse proxy and no authentication** — anyone with the URL and network access can use it. This is an accepted tradeoff for an internal LAN tool, but worth remembering if access is ever broadened.
+**Deployment:** Streamlit runs via NSSM as a Windows service, bound to `0.0.0.0:8501`. As of 2026-06-23, production sits behind an **IIS reverse proxy** terminating HTTPS at `https://devicedashboard.image.local/` (see §7a for the full setup and a regression risk to watch for). Direct `:8501` access still works during the transition period. **Still no authentication at any layer** — IIS proxies the request through, it doesn't gate it — so anyone with network access can use the dashboard. This was an accepted tradeoff for an internal LAN tool; Windows Integrated Auth via IIS is sketched as a design (not yet implemented) in §9.
 
 ---
 
@@ -149,7 +149,7 @@ The consumer-facing view — `v_devices_health` joined with `device_notes`. This
 
 ## 7. Known limitations / accepted risk
 
-- **No authentication.** Anyone with the URL and network access can view device data and edit notes/status. Accepted for an internal LAN tool; would need real auth before broadening access.
+- **No authentication at any layer.** The IIS reverse proxy (§7a) terminates TLS and proxies the connection through — it does not gate it. Anyone with the URL and network access can view device data and edit notes/status. Accepted for an internal LAN tool; Windows Integrated Auth design is sketched in §9 but not yet implemented.
 - **Note/Status attribution is honor-system.** The "Your Name" field isn't verified against anything.
 - **`PatchStatus` reflects "any Microsoft update installed recently," not specifically the monthly Cumulative Update** — see §6.
 - **Dev vs. prod PowerShell version mismatch is a live risk.** The Refresh button hardcodes `powershell` (Windows PowerShell 5.1), not `pwsh`. Any future PS7+-only syntax added to the pipeline scripts will silently break under this invocation path — there's no automated check for this.
@@ -162,7 +162,26 @@ Production now runs behind an **IIS reverse proxy** (ARR + URL Rewrite) terminat
 
 **One regression risk specific to this setup, worth remembering if the NSSM service is ever recreated again:** `enableCORS = false` was originally only being set via an NSSM command-line flag, not in `config.toml` itself. If the service's launch arguments are ever rebuilt from scratch without that flag, CORS protection silently re-enables and the WebSocket handshake fails with a 403 — the exact failure mode that took the longest to diagnose during the original IIS setup. This has since been moved into `config.toml` directly so it can't be silently dropped this way again — confirm it's still there (`enableCORS = false` under `[server]`) if WebSocket connections start failing after any future service changes.
 
-## 8. Local environment cleanup (dev machine, not the repo)
+## 7b. Git/GitHub workflow and repository hygiene (added 2026-06-25)
+
+**Branch workflow (the actual team-style flow now in use):** `feature/*` branches are developed and tested on the dev box, PR'd into `dev`, pulled locally to `dev` on the dev box for testing, then PR'd from `dev` into `main` and pulled on production. Production's `main` and the dev box's `feature`/`dev` branches are expected to diverge only in per-environment config files (see below) — application code should stay identical across them via this PR flow, not by hand-editing files on either server directly.
+
+**Per-environment files were committed before `.gitignore` rules existed for them.** `.gitignore` cannot retroactively untrack a file already in a repo — adding a rule only stops *future* commits. This was caught when production's locally-modified `config.json` and `.streamlit/config.toml` showed as "modified" in `git status` instead of being invisible/untracked as intended. Fixed via `git rm --cached` (untracks going forward; does **not** touch the working file on disk) for:
+- `config.json` — already gitignored, just never actually untracked after the rule was added
+- `.streamlit/config.toml` — was missing from `.gitignore` entirely (not a tracking-order issue, a real gap) — added
+- `data/devicescope.db` — confirmed via `git log --all -- data/devicescope.db` that it was **never** committed; added to `.gitignore` as a safety net regardless, since a future `git pull` overwriting the live production DB would be a serious incident
+- `data/old/*.csv` — the existing `data/*.csv` glob doesn't recurse into subdirectories; added `data/old/` explicitly
+- Stale-but-already-gitignored `__pycache__/*.pyc` and `logs/*.log` — untracked, no gitignore change needed
+
+**`sharepoint.config` (found at `Archive - Project Files/sharepoint.config`) was tracked and contained a live SharePoint share link with an embedded sharing token** — not a password, but functionally a bearer credential for that folder. No rotation was needed: the SharePoint site it pointed to had already been deleted independently, so the link was already dead. Untracked and gitignored going forward.
+
+**Core application files (`Invoke-DeviceScopePipeline.ps1`, `collectors/`, `sql/`) were never added to git on the `feature/re-engineer-with-database` branch at all** — confirmed via `git check-ignore -v` that nothing was silently excluding them; they had simply never been `git add`-ed. This was the most consequential finding of the cleanup pass: had this branch been merged without catching it, `dev`/`main` would have been missing the pipeline orchestrator, all six collectors, and the schema/views entirely. Added in their own commit.
+
+**Open item, deliberately deferred:** old commits prior to the untracking fix still contain the full historical content of `config.json` and `sharepoint.config` (cert thumbprint, Key Vault name, tenant/client IDs, the now-dead SharePoint link). `git rm --cached` does not remove this from history. A `git filter-repo` rewrite would scrub it, but rewrites every commit hash repo-wide, requires a force-push, and invalidates in-flight PRs/clones — judged not worth the disruption for what amounts to no live secrets in a repo whose actual visibility/access scope hasn't been re-confirmed as the reason for proceeding. Revisit if the repo's visibility ever changes, or before treating this as fully closed.
+
+A full, copy-pasteable command reference for this cleanup pass lives in `markdown/GIT_CLEANUP_COMMANDS_REFERENCE.md`.
+
+
 
 A file inventory taken during this session showed 12,431 files/folders under the project root — **98.1% (12,199) was `.venv`**, the Python virtual environment, fully regenerable via `pip install -r requirements.txt -r packages.txt` and already excluded in `.gitignore`. Also safe to clear (all already gitignored): `__pycache__/`, `.pytest_cache/`, `logs/*.log`, and the 15 leftover pre-SQLite `data/DeviceScope_Merged_*.csv` exports (`data/` and `data/old/`), now fully superseded by `devicescope.db`. `markdown/` has several point-in-time development summaries (`CLEANUP_ANALYSIS.md`, `CLEANUP_IMPLEMENTATION.md`, `CODE_CLEANUP_SUMMARY.md`, `BEFORE_AFTER_COMPARISON.md`, `ENHANCEMENTS.md`, `ENHANCEMENTS_COMPLETE.md`, `FINAL_AUTHENTICATION_SUMMARY.md`, `FINAL_REPORT.md`) that are likely stale and worth archiving now that this document exists.
 
@@ -170,7 +189,11 @@ A file inventory taken during this session showed 12,431 files/folders under the
 
 ## 9. Possible future work (not started)
 
-- Real authentication (IIS + Windows Integrated Auth) for automatic, verified note attribution by AD Display Name
+- **Real authentication (IIS + Windows Integrated Auth) for automatic, verified note attribution by AD Display Name — design sketched 2026-06-25, no code written yet:**
+  - IIS side: enable the Windows Authentication role service on the site, disable Anonymous Auth. ARR is a reverse proxy, so the authenticated Windows identity (`LOGON_USER` server variable) lives in IIS's pipeline only — it does **not** automatically reach the Streamlit process across the proxy boundary. Needs a URL Rewrite rule injecting `LOGON_USER` into a forwarded header (e.g. `X-Remote-User`), plus ARR's "Allow server variables to be rewritten" enabled for it.
+  - Streamlit side: read the header via `st.context.headers` (confirm Streamlit version supports this), strip the `DOMAIN\` prefix, resolve sAMAccountName → Display Name via a small cached AD-lookup table (a lightweight 7th "collector" populating a new small table, rather than a live LDAP call on every page load — consistent with the "SQL views own all derivation" principle). If present and resolved, skip the manual "Your Name" gate entirely; if the header is missing (e.g. someone still on direct `:8501` access), fall back to today's honor-system gate rather than breaking the page — gives a clean migration path instead of a hard cutover.
+  - Sequencing note: this depends on the current `feature/re-engineer-with-database` work already being deployed to production first — don't bundle the IIS auth config change with an unrelated code deploy in the same maintenance window.
 - A KACE-only/EventSentry-only "removal needed" trend counter in Problem Summary, once devices in that state stabilize enough to be worth tracking separately from "missing agent"
 - "Vs. yesterday" deltas are implemented for the headline metrics; nothing yet for longer trend windows (week-over-week, month-over-month)
 - Charts tab has room to grow (Sankey diagram for source-overlap, treemap for patch-status-vs-health) — explicitly left as an open invitation in the Charts tab's own caption
+- Decide on the `git filter-repo` history rewrite for `config.json`/`sharepoint.config` (see §7b) — deferred, not abandoned
