@@ -57,7 +57,7 @@ device-scope-dashboard-v2/
 └── markdown/                          # documentation, including this file
 ```
 
-**Pipeline flow:** `Invoke-DeviceScopePipeline.ps1` runs each collector (writing to its own raw table, independent of the others' success/failure), logs each run to `source_run_log`, then re-applies `02_views.sql`. The Streamlit "🔄 Refresh Device Data" button triggers this same script via `subprocess`.
+**Pipeline flow:** `Invoke-DeviceScopePipeline.ps1` runs each collector (writing to its own raw table, independent of the others' success/failure), logs each run to `source_run_log`, then re-applies `02_views.sql`. The Streamlit "🔄 Refresh Device Data" button triggers this same script via `subprocess`. On first run against a path with no DB file present, it instead calls `Initialize-DeviceScopeDb` to run the full `01_schema.sql` (tables + views) — this is expected, normal behavior the first time a fresh environment (a new dev checkout, or production after the §7c cutover) is pointed at a `data/` folder with nothing in it yet, not an error condition.
 
 **Deployment:** Streamlit runs via NSSM as a Windows service, bound to `0.0.0.0:8501`. As of 2026-06-23, production sits behind an **IIS reverse proxy** terminating HTTPS at `https://devicedashboard.image.local/` (see §7a for the full setup and a regression risk to watch for). Direct `:8501` access still works during the transition period. **Still no authentication at any layer** — IIS proxies the request through, it doesn't gate it — so anyone with network access can use the dashboard. This was an accepted tradeoff for an internal LAN tool; Windows Integrated Auth via IIS is sketched as a design (not yet implemented) in §9.
 
@@ -70,6 +70,14 @@ Raw tables, one per source: `entra_raw`, `intune_raw`, `ad_raw`, `sophos_raw`, `
 Also in this file: `source_run_log` (per-source success/failure/row-count per pipeline run, powers the freshness banner) and `device_notes` (persistent user notes/status, keyed on `AD_ObjectGUID` when available, else `NAME:<name_key>` — never touched by the daily import).
 
 **Not in this file, created lazily by Streamlit itself:** `metric_snapshots` — a daily snapshot of fleet-wide totals (always computed from the *unfiltered* dataset) used to drive the "vs. yesterday" trend deltas. It lives outside the schema/views lifecycle deliberately, since it's dashboard presentation state, not raw device data.
+
+**Monitoring collector health day-to-day** — three places to look, in order of usefulness:
+1. **`source_run_log` table** — the authoritative, queryable record (per-source status/row-count/error per run); this is what powers the freshness banner in the app, so it's the right first stop for "did last night's pull work?" Query via `sqlite3`, Python's built-in `sqlite3` module, or PowerShell's `PSSQLite` module (see the `-Scope AllUsers` note in §7c if `Invoke-SqliteQuery` reports the module isn't found when called from the NSSM service context):
+   ```powershell
+   sqlite3 data\devicescope.db "SELECT source_name, status, row_count, error_message, started_at, completed_at FROM source_run_log ORDER BY started_at DESC LIMIT 20;"
+   ```
+2. **Live console output** — if running `Invoke-DeviceScopePipeline.ps1` manually/interactively, `Write-Output` streams the same per-source detail (secret-resolution source, rows written, final summary) straight to the terminal in real time.
+3. **`logs\streamlit_stdout.log` / `logs\streamlit_stderr.log`** — the NSSM service's own stdout/stderr, separate from the pipeline's own logging. This is where to look when the *app* misbehaves rather than the *pipeline* — e.g. the Refresh button's `subprocess` call failing before the pipeline's own `Write-Output` lines would even appear (see the PSSQLite scope issue in §7c for a real example of this).
 
 ---
 
@@ -121,7 +129,7 @@ The consumer-facing view — `v_devices_health` joined with `device_notes`. This
 - **Metrics / Problem Summary / Patch Management / Charts** are all **filter-reactive** — computed from `filtered_df`, matching whatever the Data table currently shows. The **daily snapshot** used for trend deltas is always computed from the unfiltered `df` regardless, to protect cross-day trend integrity; delta arrows are suppressed entirely whenever any filter is active, since comparing a filtered subset against yesterday's whole-fleet snapshot would be misleading.
 - **Data table** — friendly column labels throughout (`FRIENDLY_COLUMN_LABELS` dict, with a generic fallback for anything not yet mapped), columns ordered by a fixed canonical list (not click order) so related groups like the AD GUID / Entra Device ID(s) / Intune Device ID trio always stay adjacent regardless of pick order. Datetime columns (`LastSeen`, `NoteUpdatedAt`) are parsed with `pd.to_datetime(..., format='mixed', utc=True).dt.tz_localize(None)` to handle genuinely mixed per-row formats across sources, then rendered via `DatetimeColumn` in 12-hour format. Notes/Status are editable inline; everything else is read-only.
 - **Device Overview** — Overview and Health & Patch sections kept as larger `st.metric()` cards (intentional — these are the headline numbers worth visual emphasis). Presence, Duplicates, Identity, Compliance, Network, and EventSentry all use `render_field_grid()` — a compact label-above/bold-value-below layout (`st.caption()` + Markdown bold + `st.divider()`, no `unsafe_allow_html`) that replicates the original CSV-app's HTML layout natively.
-- **🔄 Refresh Device Data** — runs the pipeline via `subprocess`. On failure, surfaces the actual captured `stdout`/`stderr`, not just the generic `CalledProcessError` summary (which only ever says "exited with status 1" and nothing else).
+- **🔄 Refresh Device Data** — runs the pipeline via `subprocess`. On failure, surfaces the actual captured `stdout`/`stderr`, not just the generic `CalledProcessError` summary (which only ever says "exited with status 1" and nothing else). This surfaced behavior is what made the PSSQLite module-scope issue in §7c diagnosable in the first place — the raw stderr showed the exact `Modules_ModuleNotFound` exception rather than a generic failure.
 
 ---
 
@@ -142,7 +150,7 @@ The consumer-facing view — `v_devices_health` joined with `device_notes`. This
 **Deliberately attempted and abandoned:**
 - **Cumulative Update / Security Update title-based tracking** — `eventsentry_patches_raw.security_update` (despite the column name) holds the update title text, but confirmed against real data that it's sourced from a QFE/`Get-HotFix`-style inventory, not the rich Windows Update Catalog. Titles never contain "Cumulative," and "Security Update (KBxxxxx)" is itself a legacy ~2016-era Windows convention unreliable for the modern fleet. `PatchStatus` (no title filtering at all) is the one trustworthy signal and is what remains.
 - **WSUS as a 7th data source** — technically would solve the above (WSUS's `SUSDB` has real classification/title data), but pointing the fleet at the existing unmanaged WSUS server would require new GPO changes and ongoing patch-approval maintenance the team doesn't want to take on. Declined.
-- **Automatic AD-based note attribution** — no real authentication exists (single shared server, no SSO/reverse-proxy layer), so there's no way to know who's editing a note without either a manual name field (implemented) or real infrastructure work (IIS + Windows Integrated Auth + an AD lookup — a legitimate but separate future project, not pursued here).
+- **Automatic AD-based note attribution** — no real authentication exists (single shared server, no SSO/reverse-proxy layer), so there's no way to know who's editing a note without either a manual name field (implemented) or real infrastructure work (IIS + Windows Integrated Auth + an AD lookup — a legitimate but separate future project, not pursued here). **Update 2026-06-25: this is no longer purely future work — production is now live behind the IIS reverse proxy (§7c), which is the actual prerequisite this item was waiting on. The design itself has been sketched in detail (§9) and is the next active thread, started in a separate chat to keep this one focused on the production cutover.**
 - **Key Vault cert-based auth on the dev/test box** — production's cert-based auth is tied to a gMSA scoped specifically to the production server's Scheduled Task identity. Setting up the equivalent on dev would require either loosening the gMSA's authorized-host list or provisioning a separate dev-only identity. Declined: the DPAPI fallback already covers dev/test, and production's existing path is trusted to keep working independently.
 
 ---
@@ -155,6 +163,7 @@ The consumer-facing view — `v_devices_health` joined with `device_notes`. This
 - **Dev vs. prod PowerShell version mismatch is a live risk.** The Refresh button hardcodes `powershell` (Windows PowerShell 5.1), not `pwsh`. Any future PS7+-only syntax added to the pipeline scripts will silently break under this invocation path — there's no automated check for this.
 - **Dev/test box intentionally does not have Key Vault cert-based auth set up.** Production's cert-based auth is tied to a gMSA scoped to the production server's Scheduled Task identity (gMSAs are explicitly restricted to an authorized host list) — replicating that on a dev box would mean either loosening that authorization list or provisioning a separate identity just for dev, neither of which was judged worth it. The DPAPI fallback already covers dev/test adequately (confirmed working as designed via the `source_run_log` review on 2026-06-22, including a real instance of `SkippedUsedCache` triggering correctly when EventSentry had a transient hiccup). This was the last open item from the original project handoff's roadmap, and it's now closed by deliberate decision rather than oversight.
 - **The NSSM service object is more fragile than its 6+ months of stable operation suggested.** During the IIS cutover (2026-06-23), repeatedly reconfiguring `AppStdout`/`AppStderr` on the existing service object left it unable to start at all, in a way that wasn't resolved by undoing the specific change that triggered it. The eventual fix was recreating the service from scratch, after first proving the app and the gMSA account were both fine via a one-shot Scheduled Task (bypassing NSSM entirely). See `NSSM_GMSA_TROUBLESHOOTING.md` for the full symptom-indexed reference — worth reading *before* touching `AppStdout`/`AppStderr` on this service again, not after.
+- **PowerShell modules installed with `-Scope CurrentUser` are invisible to the NSSM service account.** See §7c — confirmed concretely with `PSSQLite`, but applies to any module installed this way going forward. The fix (`-Scope AllUsers`, elevated, then restart the service) is the same fragile-service-identity pattern as the row above; worth checking module scope first whenever a service-invoked script reports `Modules_ModuleNotFound` despite working fine when run interactively.
 
 ## 7a. Production deployment architecture (added 2026-06-23)
 
@@ -177,22 +186,70 @@ Production now runs behind an **IIS reverse proxy** (ARR + URL Rewrite) terminat
 
 **Core application files (`Invoke-DeviceScopePipeline.ps1`, `collectors/`, `sql/`) were never added to git on the `feature/re-engineer-with-database` branch at all** — confirmed via `git check-ignore -v` that nothing was silently excluding them; they had simply never been `git add`-ed. This was the most consequential finding of the cleanup pass: had this branch been merged without catching it, `dev`/`main` would have been missing the pipeline orchestrator, all six collectors, and the schema/views entirely. Added in their own commit.
 
-**Open item, deliberately deferred:** old commits prior to the untracking fix still contain the full historical content of `config.json` and `sharepoint.config` (cert thumbprint, Key Vault name, tenant/client IDs, the now-dead SharePoint link). `git rm --cached` does not remove this from history. A `git filter-repo` rewrite would scrub it, but rewrites every commit hash repo-wide, requires a force-push, and invalidates in-flight PRs/clones — judged not worth the disruption for what amounts to no live secrets in a repo whose actual visibility/access scope hasn't been re-confirmed as the reason for proceeding. Revisit if the repo's visibility ever changes, or before treating this as fully closed.
+**Open item, deliberately deferred:** old commits prior to the untracking fix still contain the full historical content of `config.json` and `sharepoint.config` (cert thumbprint, Key Vault name, tenant/client IDs, the now-dead SharePoint link). A check of `config.json`'s tracked history (`git log -p -- config.json`) confirmed the values present there are Key Vault *secret names* and DPAPI *filenames* (lookup references), not actual secret values — slightly better-informed than the original "no live secrets exposed" read, but the same practical conclusion: no live credential material, just internal naming-convention disclosure. `git rm --cached` does not remove any of this from history. A `git filter-repo` rewrite would scrub it, but rewrites every commit hash repo-wide, requires a force-push, and invalidates in-flight PRs/clones — judged not worth the disruption for what amounts to no live secrets in a repo whose actual visibility/access scope hasn't been re-confirmed as the reason for proceeding. Revisit if the repo's visibility ever changes, or before treating this as fully closed.
 
 A full, copy-pasteable command reference for this cleanup pass lives in `markdown/GIT_CLEANUP_COMMANDS_REFERENCE.md`.
 
-
-
 A file inventory taken during this session showed 12,431 files/folders under the project root — **98.1% (12,199) was `.venv`**, the Python virtual environment, fully regenerable via `pip install -r requirements.txt -r packages.txt` and already excluded in `.gitignore`. Also safe to clear (all already gitignored): `__pycache__/`, `.pytest_cache/`, `logs/*.log`, and the 15 leftover pre-SQLite `data/DeviceScope_Merged_*.csv` exports (`data/` and `data/old/`), now fully superseded by `devicescope.db`. `markdown/` has several point-in-time development summaries (`CLEANUP_ANALYSIS.md`, `CLEANUP_IMPLEMENTATION.md`, `CODE_CLEANUP_SUMMARY.md`, `BEFORE_AFTER_COMPARISON.md`, `ENHANCEMENTS.md`, `ENHANCEMENTS_COMPLETE.md`, `FINAL_AUTHENTICATION_SUMMARY.md`, `FINAL_REPORT.md`) that are likely stale and worth archiving now that this document exists.
+
+## 7c. Dev→main production cutover and first-run gotchas (added 2026-06-25)
+
+`feature/re-engineer-with-database` was merged through `dev` and PR'd from `dev` into `main`. Pulling that merge onto the **production** box (a different working directory than the dev box, with its own long-lived local config) surfaced two issues neither the dev-box cleanup pass nor a fresh clone would have caught — both are now closed, but the sequence is worth keeping as a reference for any future server that's still carrying pre-`9e6d7ec` tracked copies of these files.
+
+**1. The untracking commit (`9e6d7ec`, §7b) reached production for the first time as part of this merge, while production's working copies of `config.json` and `.streamlit/config.toml` were locally modified (real, live values) relative to the old tracked baseline.** `git pull` correctly refused, rather than silently overwriting them:
+```
+error: Your local changes to the following files would be overwritten by merge:
+        .streamlit/config.toml
+        config.json
+Please commit your changes or stash them before you merge.
+```
+Resolved by backing up both files outside the repo, then:
+```powershell
+git checkout -- config.json .streamlit/config.toml   # discard local mods, clears the way
+git pull origin main                                  # untracking commit now applies cleanly
+# restore real values from backup
+copy config.json.keep config.json
+copy .streamlit\config.toml.keep .streamlit\config.toml
+git status   # should show neither file at all — confirms untracked + gitignored
+```
+This sequence is the correct playbook for any other clone/server still carrying tracked copies of these files from before `9e6d7ec`.
+
+**2. The same pull hit a transient Windows file-lock on a stale tracked `__pycache__\*.pyc`:**
+```
+Unlink of file '__pycache__/streamlit_app.cpython-313.pyc' failed. Should I try again? (y/n)
+```
+Resolved by retrying once; did not block the merge. If this recurs, check for a running Python/Streamlit process holding the file open before retrying blindly.
+
+**3. First production database initialization.** Production's `data/devicescope.db` did not exist after the merge (expected — it's gitignored and was never part of the repo). The app's own error message on first load is accurate and expected, not a bug:
+```
+No database found yet at: C:\apps\device-scope-dashboard-v2\data\devicescope.db
+Run the pipeline once to initialize, or check config.json's SqliteDbPath if this looks like the wrong location.
+```
+Resolved by running `.\Invoke-DeviceScopePipeline.ps1` once manually from the production app directory — this calls `Initialize-DeviceScopeDb` (full `01_schema.sql` + `02_views.sql`) since no DB file is present, then runs all six collectors against live production credentials (Key Vault/gMSA path, not the dev-box DPAPI fallback).
+
+**4. `PSSQLite` module scope mismatch — the most reusable lesson here.** Running the pipeline manually after `Install-Module PSSQLite -Scope CurrentUser` worked fine, and the manual DB initialization succeeded. But clicking "🔄 Refresh Device Data" in the running app failed:
+```
+Pipeline stderr:
+Import-Module : The specified module 'PSSQLite' was not loaded because no valid module file was found...
+FullyQualifiedErrorId : Modules_ModuleNotFound,...
+```
+Root cause: `-Scope CurrentUser` installs to the interactive admin's own profile path, which the NSSM service account (a different identity, per `DEPLOYMENT_GUIDE.md`'s `DOMAIN\svc-devicescope$`) does not see on its own `$PSModulePath`. Same category of issue as the gMSA/Key Vault host-authorization scoping already documented above (§7, "Dev/test box..." bullet) and the NSSM service fragility bullet — **whoever the process actually runs as determines what's visible to it**, and this needs to be checked explicitly any time a module/dependency is added post-deployment, not assumed from an interactive test alone.
+
+Fixed via:
+```powershell
+Install-Module PSSQLite -Scope AllUsers -Force   # elevated session required
+nssm restart <serviceName>                        # service may have a stale module-path snapshot
+```
+Confirmed resolved — Refresh Device Data button now succeeds end-to-end in production.
 
 ---
 
 ## 9. Possible future work (not started)
 
-- **Real authentication (IIS + Windows Integrated Auth) for automatic, verified note attribution by AD Display Name — design sketched 2026-06-25, no code written yet:**
+- **Real authentication (IIS + Windows Integrated Auth) for automatic, verified note attribution by AD Display Name — design sketched 2026-06-25, no code written yet. Now an actively in-progress thread (started in a separate chat 2026-06-25), since production is live behind IIS and the prerequisite infrastructure this item was blocked on now exists:**
   - IIS side: enable the Windows Authentication role service on the site, disable Anonymous Auth. ARR is a reverse proxy, so the authenticated Windows identity (`LOGON_USER` server variable) lives in IIS's pipeline only — it does **not** automatically reach the Streamlit process across the proxy boundary. Needs a URL Rewrite rule injecting `LOGON_USER` into a forwarded header (e.g. `X-Remote-User`), plus ARR's "Allow server variables to be rewritten" enabled for it.
   - Streamlit side: read the header via `st.context.headers` (confirm Streamlit version supports this), strip the `DOMAIN\` prefix, resolve sAMAccountName → Display Name via a small cached AD-lookup table (a lightweight 7th "collector" populating a new small table, rather than a live LDAP call on every page load — consistent with the "SQL views own all derivation" principle). If present and resolved, skip the manual "Your Name" gate entirely; if the header is missing (e.g. someone still on direct `:8501` access), fall back to today's honor-system gate rather than breaking the page — gives a clean migration path instead of a hard cutover.
-  - Sequencing note: this depends on the current `feature/re-engineer-with-database` work already being deployed to production first — don't bundle the IIS auth config change with an unrelated code deploy in the same maintenance window.
+  - Sequencing note: this depends on the current `feature/re-engineer-with-database` work already being deployed to production first — **this dependency is now satisfied (§7c)** — don't bundle the IIS auth config change with an unrelated code deploy in the same maintenance window.
 - A KACE-only/EventSentry-only "removal needed" trend counter in Problem Summary, once devices in that state stabilize enough to be worth tracking separately from "missing agent"
 - "Vs. yesterday" deltas are implemented for the headline metrics; nothing yet for longer trend windows (week-over-week, month-over-month)
 - Charts tab has room to grow (Sankey diagram for source-overlap, treemap for patch-status-vs-health) — explicitly left as an open invitation in the Charts tab's own caption

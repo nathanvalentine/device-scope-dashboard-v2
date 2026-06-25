@@ -1,7 +1,7 @@
 # Git / GitHub Cleanup Reference — DeviceScope Dashboard
 
 **Date:** 2026-06-25
-**Purpose:** A standalone, copy-pasteable record of the git/GitHub commands worked through during the repository cleanup and `feature/re-engineer-with-database` push. Companion to `PROJECT_REFERENCE.md` §7b, which explains *why* each of these was needed. Useful as a template if this class of problem (per-environment files committed before being gitignored, core files never added) comes up again.
+**Purpose:** A standalone, copy-pasteable record of the git/GitHub commands worked through during the repository cleanup, the `feature/re-engineer-with-database` push, and the subsequent production cutover pull. Companion to `PROJECT_REFERENCE.md` §7b/§7c, which explain *why* each of these was needed. Useful as a template if this class of problem (per-environment files committed before being gitignored, core files never added, or a downstream server still carrying old tracked copies) comes up again.
 
 ---
 
@@ -160,3 +160,95 @@ git push --force          # requires re-cloning or hard-reset on every other clo
 ```
 
 **Not run this session** — judged not urgent given no live secrets and an already-dead SharePoint link, but documented here for when/if it's revisited. See `PROJECT_REFERENCE.md` §7b for the reasoning.
+
+A spot-check of `config.json`'s tracked history (`git log -p -- config.json | findstr /i "password key secret token"`) confirmed the matches are Key Vault *secret names* and DPAPI *filenames* — lookup references, not actual credential values. Slightly more informed than the original "no live secrets" read, but the same conclusion either way: no rotation-worthy material, just internal naming-convention disclosure if this is ever scrubbed.
+
+---
+
+## 12. Confirming whether a given commit has reached a particular branch/server (added 2026-06-25)
+
+Before assuming an untracking fix (or any commit) has propagated everywhere, check it directly on the branch/checkout in question rather than inferring from where it was originally made:
+
+```powershell
+git log --oneline -- config.json
+git log --oneline -- .streamlit/config.toml
+git log --oneline origin/dev -- config.json    # same check against a remote branch ref
+```
+
+This is what confirmed the untracking commit (`9e6d7ec`) existed on `dev` but had **not yet reached `main`** — i.e., production's next pull would be the first time that commit's effects applied there, which is exactly the scenario in §13 below.
+
+---
+
+## 13. Pulling an untracking commit onto a server with locally-modified tracked copies (added 2026-06-25)
+
+This is the production-specific sequence: a server whose `main` branch predates an untracking commit (§4/§5 above), and which has its own live, locally-modified values in the files being untracked. A plain `git pull` will correctly refuse rather than silently overwrite:
+
+```powershell
+git pull origin main
+```
+```
+error: Your local changes to the following files would be overwritten by merge:
+        .streamlit/config.toml
+        config.json
+Please commit your changes or stash them before you merge.
+Aborting
+```
+
+**Do not run `git rm --cached` again here** — that decision was already made and committed upstream (§4); this server just needs to *receive* it. The correct sequence:
+
+```powershell
+# 1. Back up the real, live values OUTSIDE git's reach first
+copy config.json config.json.keep
+copy .streamlit\config.toml .streamlit\config.toml.keep
+
+# 2. Discard local modifications so the merge has nothing to conflict with
+git checkout -- config.json .streamlit/config.toml
+
+# 3. Pull — the untracking commit now applies cleanly
+git pull origin main
+
+# 4. Restore the real values (files are now untracked + gitignored,
+#    so this will never show up in git status again)
+copy config.json.keep config.json
+copy .streamlit\config.toml.keep .streamlit\config.toml
+
+# 5. Confirm clean — neither file should appear at all
+git status
+
+# 6. Clean up the temp copies once confirmed
+Remove-Item config.json.keep, .streamlit\config.toml.keep
+```
+
+**A transient Windows file-lock can interrupt step 3** if a stale tracked `__pycache__/*.pyc` is being removed as part of the same merge and something (a running Python process, AV scan) has it open:
+```
+Unlink of file '__pycache__/streamlit_app.cpython-313.pyc' failed. Should I try again? (y/n)
+```
+Answering `y` once was sufficient in this case; if it loops, check for a running process holding the file first (`Get-Process python, streamlit`) rather than retrying indefinitely.
+
+---
+
+## 14. PowerShell module scope — install location must match the *running* identity (added 2026-06-25)
+
+Not a git command, but caught during this same production session and worth keeping alongside the rest of this reference since it's the same root-cause pattern as the per-environment file issues above: **what's installed/visible depends entirely on which identity is asking.**
+
+```powershell
+# This only makes the module visible to the CURRENT interactive user:
+Install-Module PSSQLite -Scope CurrentUser -Force
+```
+An NSSM-run service (a different account) won't see it, and will fail with:
+```
+Import-Module : The specified module 'PSSQLite' was not loaded because no valid module file was found...
+FullyQualifiedErrorId : Modules_ModuleNotFound,...
+```
+
+Fix — install for all users (requires an elevated session), then restart the service so it picks up the new module path rather than a stale snapshot:
+```powershell
+Install-Module PSSQLite -Scope AllUsers -Force
+nssm restart <serviceName>
+```
+
+To confirm scope after the fact:
+```powershell
+Get-Module PSSQLite -ListAvailable | Select-Object Name, Path
+```
+A path under `C:\Program Files\WindowsPowerShell\Modules` confirms `AllUsers` scope landed correctly.
