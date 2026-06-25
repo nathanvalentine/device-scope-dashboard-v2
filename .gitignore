@@ -59,4 +59,11 @@ data/*.csv
 # OS-specific
 # ------------------------
 Thumbs.db
-.DS_Store
+.DS_Store.streamlit/config.toml
+data/devicescope.db
+
+# Per-environment / sensitive (added during cleanup)
+.streamlit/config.toml
+data/devicescope.db
+data/old/
+sharepoint.config
